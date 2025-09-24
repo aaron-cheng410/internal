@@ -740,7 +740,16 @@ elif page == "General Dashboard":
 
         with col2:
             # quick free-text search across title/summary
-            kw = st.text_input("Search Title/Summary")
+            with col2:
+                # Lead Score range (1–5). Works even if the column is text.
+                lead_min, lead_max = 1, 5
+                if "Lead Score" in df.columns:
+                    # coerce to int safely
+                    lead_series = pd.to_numeric(df["Lead Score"], errors="coerce").fillna(0).astype(int)
+                    lead_min = max(1, int(lead_series.min())) if not lead_series.empty else 1
+                    lead_max = min(5, int(lead_series.max())) if not lead_series.empty else 5
+                lead_range = st.slider("Lead Score", min_value=1, max_value=5, value=(lead_min, lead_max))
+
 
         with col3:
             # scraped date range
@@ -770,12 +779,9 @@ elif page == "General Dashboard":
         if sel_proj:
             view = view[view["Project Name"].astype(str).isin(sel_proj)]
 
-        if kw:
-            mask = (
-                view["Article Title"].fillna("").str.contains(kw, case=False, na=False) |
-                view["Article Summary"].fillna("").str.contains(kw, case=False, na=False)
-            )
-            view = view[mask]
+        if "Lead Score" in view.columns:
+            _ls = pd.to_numeric(view["Lead Score"], errors="coerce").fillna(0).astype(int)
+            view = view[(_ls >= lead_range[0]) & (_ls <= lead_range[1])]
 
         if isinstance(d_rng, (list, tuple)) and all(d_rng):
             start = pd.to_datetime(d_rng[0])
