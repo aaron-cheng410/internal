@@ -567,7 +567,7 @@ def replace_inputs_from_excel(file) -> int:
 st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Go to",
-    ["Open Bids Dashboard", "General Dashboard", "Inputs", "Archived", "Chatbot"]
+    ["Open Bids Dashboard", "General Dashboard", "Inputs", "Archived"]
 )
 
 
