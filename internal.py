@@ -45,7 +45,6 @@ SPLIT_PATTERN = r"\s*\+\s*"   # split ONLY on ';' or '+' (never commas)
 
 # ========= Chatbot helpers (single-table, safe SQL) =========
 
-
 from sqlalchemy import MetaData, Table
 
 def _common_cols(src: str, dst: str) -> list[str]:
@@ -435,10 +434,11 @@ def ensure_general_internal_table():
     - Never drop/recreate
     """
     desired_cols = [
-        "Project Name", "Architect", "Possible Engineer",
+        "Project Name", "Architect", "Developer", "Possible Engineer",
         "Location", "Groundbreaking Year", "Completion Year",
         "Article Title", "Article Date", "Scraped Date",
-        "Article Link", "Article Summary", "Milestone Mentions",
+        "Article Link", "Article Summary",
+        "Milestone Mentions", "Planned Mentions",
         "Lead Score",
     ]
 
@@ -466,12 +466,13 @@ def ensure_general_internal_table():
 @st.cache_data(ttl=60)
 def load_general():
     cols = [
-        "Project Name","Architect","Possible Engineer","Location",
+        "Project Name","Architect","Developer","Possible Engineer","Location",
         "Groundbreaking Year","Completion Year",
         "Article Title","Article Date","Scraped Date",
-        "Article Link","Article Summary","Milestone Mentions",
+        "Article Link","Article Summary","Milestone Mentions","Planned Mentions", "Topic",
         "Lead Score",
     ]
+
     q = f"SELECT {', '.join(quote_ident(c) for c in cols)} FROM general_internal ORDER BY {quote_ident('Scraped Date')} DESC"
     df = pd.read_sql(q, engine)
     if "Scraped Date" in df.columns:
@@ -479,9 +480,16 @@ def load_general():
     return df
 
 def reorder_general(df: pd.DataFrame) -> pd.DataFrame:
-    priority = ["Project Name","Lead Score", "Architect"] + [
-        "Possible Engineer","Location","Groundbreaking Year","Completion Year","Article Title","Article Date","Scraped Date","Article Link","Article Summary","Milestone Mentions"
+    priority = [
+        "Project Name", "Lead Score",
+        "Architect", "Developer", "Possible Engineer",
+        "Location",
+        "Groundbreaking Year","Completion Year",
+        "Article Title","Article Date","Scraped Date",
+        "Article Link","Article Summary",
+        "Milestone Mentions","Planned Mentions", "Topic"
     ]
+
     order = [c for c in priority if c in df.columns] + [c for c in df.columns if c not in priority]
     return df[order]
 
@@ -694,10 +702,13 @@ if page == "Open Bids Dashboard":
             column_config={
                 "__archive__": st.column_config.CheckboxColumn("Archive?", help="Move this row to Archive"),
                 "⭐ Groundbreaking This Year": st.column_config.TextColumn(
-                    "⭐ Groundbreaking This Year",
-                    help=f"Groundbreaking Year == {THIS_YEAR}"
+                    "⭐ Groundbreaking This Year", help=f"Groundbreaking Year == {THIS_YEAR}"
                 ),
-                "Article Link": st.column_config.LinkColumn("Article Link", display_text="Click to open"),
+                "Article Link": st.column_config.LinkColumn("Article Link", display_text="Open"),
+                "Article Summary": st.column_config.TextColumn(width="large"),
+                "Milestone Mentions": st.column_config.TextColumn(width="large"),
+                "Planned Mentions": st.column_config.TextColumn(width="large"),
+                "Developer": st.column_config.TextColumn("Developer"),
             },
             disabled=[c for c in view_for_edit.columns if c != "__archive__"],
             hide_index=True,
@@ -739,17 +750,14 @@ elif page == "General Dashboard":
             sel_proj = st.multiselect("Project Name", projects)
 
         with col2:
-            # quick free-text search across title/summary
-            with col2:
-                # Lead Score range (1–5). Works even if the column is text.
-                lead_min, lead_max = 1, 5
-                if "Lead Score" in df.columns:
-                    # coerce to int safely
-                    lead_series = pd.to_numeric(df["Lead Score"], errors="coerce").fillna(0).astype(int)
-                    lead_min = max(1, int(lead_series.min())) if not lead_series.empty else 1
-                    lead_max = min(5, int(lead_series.max())) if not lead_series.empty else 5
-                lead_range = st.slider("Lead Score", min_value=1, max_value=5, value=(lead_min, lead_max))
-
+            # Lead Score range (1–5). Works even if the column is text.
+            lead_min, lead_max = 1, 4
+            if "Lead Score" in df.columns:
+                # coerce to int safely
+                lead_series = pd.to_numeric(df["Lead Score"], errors="coerce").fillna(0).astype(int)
+                lead_min = max(1, int(lead_series.min())) if not lead_series.empty else 1
+                lead_max = min(4, int(lead_series.max())) if not lead_series.empty else 4
+            lead_range = st.slider("Lead Score", min_value=1, max_value=4, value=(lead_min, lead_max))
 
         with col3:
             # scraped date range
@@ -762,13 +770,13 @@ elif page == "General Dashboard":
 
 
         # Year filters row (unchanged)
-        rowL1, rowY1, rowY2 = st.columns([2, 2, 3])
+        rowL1, rowT1, rowY2 = st.columns([2, 2, 3])
         with rowL1:
             loc_choices = tokens_for_filter(df.get("Location", pd.Series()))
             sel_loc = st.multiselect("Location", loc_choices, key="loc_general")
-        with rowY1:
-            gb_choices_g = years_for_filter(df.get("Groundbreaking Year", pd.Series()))
-            sel_gb_years_g = st.multiselect("Groundbreaking Year", gb_choices_g, key="gb_years_general")
+        with rowT1:
+            topic_choices = tokens_for_filter(df.get("Topic", pd.Series()))
+            sel_topics = st.multiselect("Topic", topic_choices, key="topics_general")
         with rowY2:
             comp_choices_g = years_for_filter(df.get("Completion Year", pd.Series()))
             sel_comp_years_g = st.multiselect("Completion Year", comp_choices_g, key="comp_years_general")
@@ -798,10 +806,13 @@ elif page == "General Dashboard":
             view = exploded_loc.drop(columns="_loc").drop_duplicates()
 
         # Year filters (unchanged)
-        if sel_gb_years_g:
-            gb_col = view.get("Groundbreaking Year", pd.Series(index=view.index, dtype=str)).fillna("").astype(str)
-            mask_gb = gb_col.apply(lambda s: bool(set(sel_gb_years_g) & set(YEAR_RE.findall(s))))
-            view = view[mask_gb]
+        if sel_topics:
+            exploded_topic = view.assign(
+                _topic=view["Topic"].fillna("").astype(str).str.split(SPLIT_PATTERN, regex=True)
+            ).explode("_topic")
+            exploded_topic["_topic"] = exploded_topic["_topic"].str.strip()
+            exploded_topic = exploded_topic[exploded_topic["_topic"].isin(sel_topics)]
+            view = exploded_topic.drop(columns="_topic").drop_duplicates()
 
         if sel_comp_years_g:
             comp_col = view.get("Completion Year", pd.Series(index=view.index, dtype=str)).fillna("").astype(str)
@@ -817,10 +828,12 @@ elif page == "General Dashboard":
         view = reorder_general(view)
 
         display_order = [
-            "Project Name", "Lead Score", "Architect","Possible Engineer","Location",
+            "Project Name", "Lead Score",
+            "Architect","Developer","Possible Engineer","Location",
             "Article Title","Article Date","Scraped Date",
-            "Article Link","Article Summary","Milestone Mentions",
+            "Article Link","Article Summary","Milestone Mentions","Planned Mentions",
         ]
+
         view = view.reindex(
             columns=[c for c in display_order if c in view.columns] +
                     [c for c in view.columns if c not in display_order]
